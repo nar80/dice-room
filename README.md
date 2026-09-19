@@ -3,6 +3,8 @@
 Gemeinsamer Würfelraum für Pen&Paper-Runden: Alle im selben Raum sehen jeden Wurf sofort,
 der Verlauf bleibt gespeichert. Gewürfelt wird auf dem Server, nicht im Browser.
 
+**Live:** https://dice-room.dice-room.workers.dev
+
 - **Seite:** Vue 3 + Quasar (`src/`)
 - **Würfel-Server:** Cloudflare Worker + Durable Object mit SQLite (`worker/index.js`)
 - Beides läuft zusammen unter **einer** URL auf Cloudflare, kostenlos.
@@ -49,31 +51,30 @@ Würfelausdrücke nutzen [rpg-dice-roller](https://dice-roller.github.io/documen
 
 ### 2. Cloudflare-Account
 
-1. Auf https://dash.cloudflare.com/sign-up registrieren (kostenlos, keine Kreditkarte nötig).
-2. Beim ersten Mal fragt Cloudflare nach einer **workers.dev-Subdomain** – einfach einen
-   Namen wählen, z. B. `nar80`. Die Seite heißt später `dice-room.nar80.workers.dev`.
+Auf https://dash.cloudflare.com/sign-up registrieren (kostenlos, geht auch mit Google-Login).
+Den „Setup-Prompt für AI-Tools“, den Cloudflare anbietet, braucht man nicht.
 
-### 3. Repo mit Cloudflare verbinden
-
-1. Im Dashboard links **Workers & Pages** → **Create** (bzw. „Anwendung erstellen“).
-2. **Import a repository** / „Repository importieren“ → GitHub verbinden → Repo `dice-room` auswählen.
-3. Einstellungen:
-   - **Build command:** `npm run build`
-   - **Deploy command:** `npx wrangler deploy` (steht meist schon drin)
-   - Rest so lassen.
-4. **Deploy** klicken. Nach 1–2 Minuten steht die URL oben auf der Seite.
-
-**Fertig.** Ab jetzt reicht `git push` – Cloudflare baut und veröffentlicht automatisch,
-genau wie Netlify bei der Sternenkarte.
-
-### Alternative ohne GitHub-Verbindung
+### 3. Erstes Hochladen vom PC
 
 ```bash
-npx wrangler login     # öffnet den Browser, einmal bestätigen
-npm run deploy         # baut und lädt hoch
+npx wrangler login     # öffnet den Browser → "Allow" klicken
+npm run deploy         # baut und lädt hoch, gibt am Ende die URL aus
 ```
 
-Das muss dann nach jeder Änderung von Hand wiederholt werden.
+Beim allerersten Deploy legt Cloudflare die workers.dev-Subdomain des Kontos an (hier: `dice-room`,
+daher `dice-room.dice-room.workers.dev`). **Die ersten ~2 Minuten** zeigt der Browser dann
+`ERR_SSL_VERSION_OR_CIPHER_MISMATCH` – das Zertifikat wird noch ausgestellt, einfach warten.
+
+### 4. GitHub verbinden (automatisch deployen)
+
+1. Dashboard → **Workers & Pages** → **dice-room** → Reiter **Settings** → Abschnitt **Build**.
+   (Die „Bindings“ nicht anfassen – die kommen aus `wrangler.toml`.)
+2. **Git repository** → **Connect** → GitHub, nur Repo `dice-room` freigeben.
+3. Branch `main`, Build command `npm run build`, Deploy command `npx wrangler deploy`, speichern.
+
+**Fertig.** Ab jetzt reicht `git push` – Cloudflare baut und veröffentlicht automatisch
+(Fortschritt im Reiter **Deployments**), genau wie Netlify bei der Sternenkarte.
+`npm run deploy` vom PC geht weiterhin, falls mal schnell ohne Push.
 
 ## Benutzen
 
@@ -93,7 +94,7 @@ Nähe. Pro Raum werden die letzten 1000 Würfe gespeichert, beim Betreten die le
 
 ```js
 import { createDiceClient } from './dice-client'
-const dice = createDiceClient({ server: 'https://dice-room.nar80.workers.dev' })
+const dice = createDiceClient({ server: 'https://dice-room.dice-room.workers.dev' })
 dice.connect('rogue-trader', 'Joseph')
 
 // in copyDamageRoll() / rollInitiative():
