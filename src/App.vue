@@ -29,6 +29,7 @@ const testLabel = ref('')
 
 const soundOn = ref(load('dice.sound', 'on') === 'on')
 const audio = new Audio(rollSound)
+const soundBlocked = ref(false)
 
 const effectiveTarget = computed(
   () => Number(testValue.value || 0) + Number(testDifficulty.value) + Number(testModifier.value || 0)
@@ -45,13 +46,29 @@ dice.on('cleared', (msg) => {
 dice.on('error', (msg) => $q.notify({ message: msg.message, color: 'negative', icon: 'error' }))
 dice.on('roll', (roll) => {
   rolls.value.unshift(roll)
-  if (soundOn.value) {
-    audio.currentTime = 0
-    audio.play().catch(() => {})
-  }
+  if (soundOn.value) playSound()
 })
 
+function playSound() {
+  audio.currentTime = 0
+  audio.play().then(
+    () => (soundBlocked.value = false),
+    () => (soundBlocked.value = true)
+  )
+}
+
+function unlockSound() {
+  audio.muted = true
+  audio.play().then(() => {
+    audio.pause()
+    audio.muted = false
+    soundBlocked.value = false
+  }, () => {})
+}
+
 onMounted(() => {
+  window.addEventListener('pointerdown', unlockSound, { once: true })
+  window.addEventListener('keydown', unlockSound, { once: true })
   const params = new URLSearchParams(window.location.search)
   room.value = slugify(params.get('raum') || load('dice.room', ''))
   name.value = load('dice.name', '')
@@ -136,6 +153,25 @@ function testResult(roll) {
   return evaluateTest(roll.total, roll.target)
 }
 
+// "3d10kh2+4: [6d, 8, 9]+4 = 21" -> Würfel einzeln, weggefallene (Suffix d) markiert
+function outputParts(output) {
+  const body = output.slice(output.indexOf(':') + 1).trim()
+  const parts = []
+  for (const [token, dice] of body.matchAll(/\[([^\]]*)\]|[^[]+/g)) {
+    if (dice === undefined) {
+      parts.push({ text: token.replace(/\s*([+\-*/=])\s*/g, ' $1 ') })
+      continue
+    }
+    for (const raw of dice.split(',')) {
+      const value = raw.trim()
+      const dropped = value.endsWith('d')
+      const success = value.endsWith('*')
+      parts.push({ die: true, dropped, success, text: dropped || success ? value.slice(0, -1) : value })
+    }
+  }
+  return parts
+}
+
 function playerColor(player) {
   let hash = 0
   for (const ch of player) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
@@ -192,6 +228,17 @@ function save(key, value) {
         >
           <q-tooltip>{{ { connected: 'Verbunden', connecting: 'Verbinde …', disconnected: 'Getrennt' }[status] }}</q-tooltip>
         </q-icon>
+        <q-chip
+          v-if="soundOn && soundBlocked"
+          clickable
+          dense
+          color="warning"
+          text-color="black"
+          icon="volume_off"
+          @click="unlockSound"
+        >
+          Ton blockiert – klicken zum Aktivieren
+        </q-chip>
         <q-btn flat round dense :icon="soundOn ? 'volume_up' : 'volume_off'" @click="toggleSound">
           <q-tooltip>Würfelgeräusch</q-tooltip>
         </q-btn>
@@ -331,7 +378,13 @@ function save(key, value) {
 
                     <div v-else class="row items-center q-mt-xs">
                       <div class="big text-secondary">{{ r.total }}</div>
-                      <div class="q-ml-md output">{{ r.output }}</div>
+                      <div class="q-ml-md output">
+                        <span class="notation">{{ r.notation }}</span>
+                        <template v-for="(part, i) in outputParts(r.output)" :key="i">
+                          <span v-if="part.die" class="die" :class="{ dropped: part.dropped, success: part.success }">{{ part.text }}</span>
+                          <span v-else>{{ part.text }}</span>
+                        </template>
+                      </div>
                     </div>
                   </div>
                 </transition-group>
@@ -436,6 +489,33 @@ body {
   color: #aaa;
   font-family: monospace;
   word-break: break-word;
+  line-height: 2;
+}
+.notation {
+  font-size: 0.75rem;
+  color: #777;
+  margin-right: 8px;
+}
+.die {
+  display: inline-block;
+  min-width: 1.9em;
+  padding: 0 4px;
+  margin: 0 2px;
+  text-align: center;
+  border: 1px solid rgba($secondary, 0.5);
+  border-radius: 4px;
+  color: #eee;
+  line-height: 1.5;
+  &.success {
+    color: $positive;
+    border-color: $positive;
+    font-weight: bold;
+  }
+  &.dropped {
+    opacity: 0.45;
+    text-decoration: line-through;
+    border-style: dashed;
+  }
 }
 .roll-enter-active {
   transition: all 0.35s ease;
