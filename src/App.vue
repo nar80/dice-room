@@ -172,6 +172,22 @@ function outputParts(output) {
   return parts
 }
 
+// "2d5kh1+1" -> "2W5 (bester zählt) +1"
+function friendlyNotation(notation) {
+  return notation
+    .replace(/(\d*)d(\d+|%)(k|d)(h|l)?(\d+)/gi, (_, count, sides, mode, hl, n) => {
+      const keep = mode.toLowerCase() === 'k'
+      const high = (hl || (keep ? 'h' : 'l')).toLowerCase() === 'h'
+      const word = keep
+        ? n === '1' ? (high ? 'bester zählt' : 'schlechtester zählt') : `${high ? 'beste' : 'schlechteste'} ${n} zählen`
+        : `${n} ${high ? 'höchste' : 'niedrigste'} gestrichen`
+      return `${count}W${sides} (${word}) `
+    })
+    .replace(/(\d*)d(\d+|%)/gi, '$1W$2')
+    .replace(/\s*([+\-])\s*/g, ' $1')
+    .trim()
+}
+
 function playerColor(player) {
   let hash = 0
   for (const ch of player) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
@@ -361,7 +377,8 @@ function save(key, value) {
                       <span class="player" :style="{ color: playerColor(r.player) }">{{ r.player }}</span>
                       <span v-if="r.label" class="label q-ml-sm ellipsis">{{ r.label }}</span>
                       <q-space />
-                      <span class="ts">{{ time(r.ts) }}</span>
+                      <span v-if="r.kind !== 'test'" class="notation q-ml-sm">{{ friendlyNotation(r.notation) }}</span>
+                      <span class="ts q-ml-sm">{{ time(r.ts) }}</span>
                     </div>
 
                     <div v-if="r.kind === 'test'" class="row items-center q-mt-xs">
@@ -379,10 +396,10 @@ function save(key, value) {
                     <div v-else class="row items-center q-mt-xs">
                       <div class="big text-secondary">{{ r.total }}</div>
                       <div class="q-ml-md output">
-                        <span class="notation">{{ r.notation }}</span>
                         <template v-for="(part, i) in outputParts(r.output)" :key="i">
                           <span v-if="part.die" class="die" :class="{ dropped: part.dropped, success: part.success }">{{ part.text }}</span>
                           <span v-else>{{ part.text }}</span>
+                          {{ ' ' }}
                         </template>
                       </div>
                     </div>
