@@ -1,8 +1,11 @@
 // Rogue Trader: W100 gleich oder unter Zielwert. Je volle 10 Punkte Abstand = 1 Grad
-// (wie im Spielleiter-Tool). 100 misslingt immer, 01 gelingt immer.
+// (wie im Spielleiter-Tool). Ab AUTO_FAIL_FROM misslingt immer, 01 gelingt immer.
+const AUTO_FAIL_FROM = 95
+
 export function evaluateTest(roll, target) {
-  const success = roll !== 100 && (roll === 1 || roll <= target)
-  const degrees = Math.floor(Math.abs(target - roll) / 10)
+  const success = roll < AUTO_FAIL_FROM && (roll === 1 || roll <= target)
+  // Automatischer Erfolg/Misserfolg gegen den Zielwert hat keine Grade
+  const degrees = success === (roll <= target) ? Math.floor(Math.abs(target - roll) / 10) : 0
   return {
     success,
     degrees,

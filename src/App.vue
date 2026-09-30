@@ -153,7 +153,8 @@ function testResult(roll) {
   return evaluateTest(roll.total, roll.target)
 }
 
-// "3d10kh2+4: [6d, 8, 9]+4 = 21" -> Würfel einzeln, weggefallene (Suffix d) markiert
+// "3d10kh2+4: [6d, 8, 9]+4 = 21" -> Würfel einzeln, weggefallene (Suffix d),
+// Erfolge (*) und auf den Mindestwert angehobene (^) markiert
 function outputParts(output) {
   const body = output.slice(output.indexOf(':') + 1).trim()
   const parts = []
@@ -164,26 +165,34 @@ function outputParts(output) {
     }
     for (const raw of dice.split(',')) {
       const value = raw.trim()
-      const dropped = value.endsWith('d')
-      const success = value.endsWith('*')
-      parts.push({ die: true, dropped, success, text: dropped || success ? value.slice(0, -1) : value })
+      const flags = value.replace(/^-?[\d.]+/, '')
+      parts.push({
+        die: true,
+        dropped: flags.includes('d'),
+        success: flags.includes('*'),
+        raised: flags.includes('^'),
+        text: value.slice(0, value.length - flags.length)
+      })
     }
   }
   return parts
 }
 
-// "2d5kh1+1" -> "2W5 (bester zählt) +1"
+// "2d5kh1+1" -> "2W5 (bester zählt) +1", "1d10min3" -> "1W10 (mindestens 3)"
 function friendlyNotation(notation) {
   return notation
-    .replace(/(\d*)d(\d+|%)(k|d)(h|l)?(\d+)/gi, (_, count, sides, mode, hl, n) => {
-      const keep = mode.toLowerCase() === 'k'
-      const high = (hl || (keep ? 'h' : 'l')).toLowerCase() === 'h'
-      const word = keep
-        ? n === '1' ? (high ? 'bester zählt' : 'schlechtester zählt') : `${high ? 'beste' : 'schlechteste'} ${n} zählen`
-        : `${n} ${high ? 'höchste' : 'niedrigste'} gestrichen`
-      return `${count}W${sides} (${word}) `
+    .replace(/(\d*)d(\d+|%)(?:min(\d+))?(?:(k|d)(h|l)?(\d+))?/gi, (_, count, sides, min, mode, hl, n) => {
+      const words = []
+      if (min) words.push(`mindestens ${min}`)
+      if (mode) {
+        const keep = mode.toLowerCase() === 'k'
+        const high = (hl || (keep ? 'h' : 'l')).toLowerCase() === 'h'
+        words.push(keep
+          ? n === '1' ? (high ? 'bester zählt' : 'schlechtester zählt') : `${high ? 'beste' : 'schlechteste'} ${n} zählen`
+          : `${n} ${high ? 'höchste' : 'niedrigste'} gestrichen`)
+      }
+      return `${count}W${sides}${words.length ? ` (${words.join(', ')}) ` : ''}`
     })
-    .replace(/(\d*)d(\d+|%)/gi, '$1W$2')
     .replace(/\s*([+\-])\s*/g, ' $1')
     .trim()
 }
@@ -397,7 +406,7 @@ function save(key, value) {
                       <div class="big text-secondary">{{ r.total }}</div>
                       <div class="q-ml-md output">
                         <template v-for="(part, i) in outputParts(r.output)" :key="i">
-                          <span v-if="part.die" class="die" :class="{ dropped: part.dropped, success: part.success }">{{ part.text }}</span>
+                          <span v-if="part.die" class="die" :class="{ dropped: part.dropped, success: part.success, raised: part.raised }" :title="part.raised ? 'Auf Mindestwert angehoben (Proven)' : null">{{ part.text }}</span>
                           <span v-else>{{ part.text }}</span>
                           {{ ' ' }}
                         </template>
@@ -527,6 +536,10 @@ body {
     color: $positive;
     border-color: $positive;
     font-weight: bold;
+  }
+  &.raised {
+    color: $warning;
+    border-color: $warning;
   }
   &.dropped {
     opacity: 0.45;
