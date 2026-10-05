@@ -11,6 +11,10 @@ const MAX_NOTATION_LENGTH = 80
 const MAX_DICE_PER_GROUP = 50
 const MAX_SIDES = 1000
 const ROOM_PATTERN = /^[a-z0-9-]{1,40}$/
+// Der Client pingt alle 30 s; Hintergrund-Tabs drosselt der Browser auf ~1x pro Minute.
+// Wer so lange gar nichts sendet, ist weg (Handy gesperrt, WLAN weg, Tab eingefroren).
+const STALE_AFTER_MS = 150_000
+const SWEEP_EVERY_MS = 60_000
 
 export default {
   async fetch(request, env) {
@@ -57,10 +61,18 @@ export class DiceRoom extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url)
     const name = cleanText(url.searchParams.get('name'), 30) || 'Unbekannt'
+    const id = cleanText(url.searchParams.get('id'), 64) || null
+
+    // Derselbe Tab verbindet sich neu: alte Verbindung ersetzen statt doppelt zeigen
+    if (id) {
+      for (const ws of this.ctx.getWebSockets()) {
+        if (ws.deserializeAttachment()?.id === id) closeQuietly(ws, 4000, 'Ersetzt')
+      }
+    }
 
     const [client, server] = Object.values(new WebSocketPair())
     this.ctx.acceptWebSocket(server)
-    server.serializeAttachment({ name })
+    server.serializeAttachment({ name, id, since: Date.now() })
 
     const history = this.sql
       .exec('SELECT * FROM rolls ORDER BY id DESC LIMIT ?', HISTORY_ON_CONNECT)
@@ -69,7 +81,31 @@ export class DiceRoom extends DurableObject {
     server.send(JSON.stringify({ type: 'history', rolls: history }))
     this.broadcastPresence()
 
+    if ((await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(Date.now() + SWEEP_EVERY_MS)
+    }
+
     return new Response(null, { status: 101, webSocket: client })
+  }
+
+  async alarm() {
+    const before = this.ctx.getWebSockets().length
+    const live = this.liveSockets()
+    if (live.length !== before) this.broadcastPresence()
+    if (live.length) await this.ctx.storage.setAlarm(Date.now() + SWEEP_EVERY_MS)
+  }
+
+  // Offene Verbindungen, die sich zuletzt gemeldet haben. Stille werden geschlossen.
+  liveSockets() {
+    const now = Date.now()
+    return this.ctx.getWebSockets().filter((ws) => {
+      if (ws.readyState !== WebSocket.OPEN) return false
+      const lastPing = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? 0
+      const { since = 0, seen = 0 } = ws.deserializeAttachment() ?? {}
+      if (now - Math.max(lastPing, since, seen) < STALE_AFTER_MS) return true
+      closeQuietly(ws, 4001, 'Zeitüberschreitung')
+      return false
+    })
   }
 
   async webSocketMessage(ws, raw) {
@@ -80,7 +116,9 @@ export class DiceRoom extends DurableObject {
       return sendError(ws, 'Ungültige Nachricht')
     }
 
-    const { name } = ws.deserializeAttachment() ?? { name: 'Unbekannt' }
+    const attachment = ws.deserializeAttachment() ?? { name: 'Unbekannt' }
+    const { name } = attachment
+    ws.serializeAttachment({ ...attachment, seen: Date.now() })
 
     if (msg.type === 'roll') {
       let roll
@@ -165,8 +203,7 @@ export class DiceRoom extends DurableObject {
   }
 
   broadcastPresence(leaving = null) {
-    const players = this.ctx
-      .getWebSockets()
+    const players = this.liveSockets()
       .filter((ws) => ws !== leaving)
       .map((ws) => ws.deserializeAttachment()?.name)
       .filter(Boolean)
@@ -196,6 +233,12 @@ function normalizeNotation(input) {
 
 function cleanText(value, max) {
   return String(value ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, max)
+}
+
+function closeQuietly(ws, code, reason) {
+  try {
+    ws.close(code, reason)
+  } catch {}
 }
 
 function sendError(ws, message) {

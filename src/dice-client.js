@@ -16,34 +16,42 @@ export function createDiceClient({ server = '' } = {}) {
   let retryTimer = null
   let retryDelay = 1000
   let wanted = false
+  // Bleibt für die Lebensdauer der Seite gleich. Der Server ersetzt beim Wiederverbinden
+  // die alte Verbindung dieses Tabs, statt den Spieler doppelt anzuzeigen.
+  const clientId = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
 
   const emit = (type, payload) => (listeners[type] || []).forEach((fn) => fn(payload))
 
   function url() {
     const base = server ? new URL(server) : new URL(window.location.href)
     const protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
-    const query = new URLSearchParams({ name })
+    const query = new URLSearchParams({ name, id: clientId })
     return `${protocol}//${base.host}/api/room/${encodeURIComponent(room)}/ws?${query}`
   }
 
   function open() {
     clearTimeout(retryTimer)
     emit('status', 'connecting')
-    socket = new WebSocket(url())
+    const ws = new WebSocket(url())
+    socket = ws
 
-    socket.onopen = () => {
+    // Eine alte, gerade schließende Verbindung darf die neue nicht beeinflussen.
+    ws.onopen = () => {
+      if (socket !== ws) return
       retryDelay = 1000
       emit('status', 'connected')
-      pingTimer = setInterval(() => socket?.readyState === 1 && socket.send('ping'), 30000)
+      clearInterval(pingTimer)
+      pingTimer = setInterval(() => ws.readyState === 1 && ws.send('ping'), 30000)
     }
 
-    socket.onmessage = (event) => {
-      if (event.data === 'pong') return
+    ws.onmessage = (event) => {
+      if (socket !== ws || event.data === 'pong') return
       const msg = JSON.parse(event.data)
       emit(msg.type, msg.type === 'roll' ? msg.roll : msg)
     }
 
-    socket.onclose = () => {
+    ws.onclose = () => {
+      if (socket !== ws) return
       clearInterval(pingTimer)
       socket = null
       emit('status', 'disconnected')
@@ -74,7 +82,11 @@ export function createDiceClient({ server = '' } = {}) {
     disconnect() {
       wanted = false
       clearTimeout(retryTimer)
-      socket?.close()
+      clearInterval(pingTimer)
+      const old = socket
+      socket = null
+      old?.close()
+      if (old) emit('status', 'disconnected')
     },
     get connected() {
       return socket?.readyState === 1

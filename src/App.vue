@@ -71,7 +71,10 @@ onMounted(() => {
   window.addEventListener('keydown', unlockSound, { once: true })
   const params = new URLSearchParams(window.location.search)
   room.value = slugify(params.get('raum') || load('dice.room', ''))
-  name.value = load('dice.name', '')
+  // ?name= kommt vom Charakterbogen (oder einem persönlichen Lesezeichen) und hat Vorrang
+  const linkName = params.get('name')?.trim().slice(0, 30)
+  if (linkName) save('dice.name', linkName)
+  name.value = linkName || load('dice.name', '')
   if (room.value && name.value) {
     join()
   } else {
@@ -100,6 +103,7 @@ function saveSetup() {
 function join() {
   const url = new URL(window.location.href)
   url.searchParams.set('raum', room.value)
+  if (url.searchParams.has('name')) url.searchParams.set('name', name.value)
   window.history.replaceState(null, '', url)
   dice.connect(room.value, name.value)
 }
@@ -352,7 +356,7 @@ function save(key, value) {
                   <div class="count">{{ quickCount }}×</div>
                   <q-btn round dense flat icon="add" :disable="quickCount >= 20" @click="quickCount++" />
                   <q-btn
-                    v-for="s in [4, 6, 8, 10, 12, 20, 100]"
+                    v-for="s in [4, 5, 6, 8, 10, 12, 20, 100]"
                     :key="s"
                     dense
                     unelevated
