@@ -200,7 +200,10 @@ function testResult(roll) {
 // "3d10kh2+4: [6d, 8, 9]+4 = 21" -> Würfel einzeln, weggefallene (Suffix d),
 // Erfolge (*) und auf den Mindestwert angehobene (^) markiert
 function outputParts(output) {
-  const body = output.slice(output.indexOf(':') + 1).trim()
+  const body = output
+    .slice(output.indexOf(':') + 1)
+    .trim()
+    .replace(/^floor\((.*)\)(\s*=)/, '$1$2')
   const parts = []
   for (const [token, dice] of body.matchAll(/\[([^\]]*)\]|[^[]+/g)) {
     if (dice === undefined) {
@@ -225,6 +228,7 @@ function outputParts(output) {
 // "2d5kh1+1" -> "2W5 (bester zählt) +1", "1d10min3" -> "1W10 (mindestens 3)"
 function friendlyNotation(notation) {
   return notation
+    .replace(/^floor\((.*)\)$/, '$1')
     .replace(/(\d*)d(\d+|%)(?:min(\d+))?(?:(k|d)(h|l)?(\d+))?/gi, (_, count, sides, min, mode, hl, n) => {
       const words = []
       if (min) words.push(`mindestens ${min}`)
@@ -443,7 +447,7 @@ function save(key, value) {
                   >
                     <div class="row items-baseline no-wrap">
                       <span class="player" :style="{ color: playerColor(r.player) }">{{ r.player }}</span>
-                      <span v-if="r.label" class="label q-ml-sm ellipsis">{{ r.label }}</span>
+                      <span v-if="r.label" class="label q-ml-sm">{{ r.label }}</span>
                       <q-space />
                       <span v-if="r.kind !== 'test'" class="notation q-ml-sm">{{ friendlyNotation(r.notation) }}</span>
                       <span class="ts q-ml-sm">{{ time(r.ts) }}</span>
@@ -587,6 +591,13 @@ body {
 }
 .label {
   color: #ccc;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.player,
+.notation,
+.ts {
+  white-space: nowrap;
 }
 .ts {
   font-size: 0.75rem;

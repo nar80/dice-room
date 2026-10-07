@@ -165,7 +165,7 @@ export class DiceRoom extends DurableObject {
 
   roll(player, msg) {
     const kind = msg.kind === 'test' ? 'test' : 'free'
-    const label = cleanText(msg.label, 60) || null
+    const label = cleanText(msg.label, 200) || null
     let target = null
     let notation
 
