@@ -27,6 +27,14 @@ const testDifficulty = ref(0)
 const testModifier = ref(0)
 const testLabel = ref('')
 
+const logFilter = ref(load('dice.filter', 'all'))
+const shownRolls = computed(() =>
+  logFilter.value === 'mine' ? rolls.value.filter((r) => r.player === name.value) : rolls.value
+)
+
+const statsOpen = ref(false)
+const statsRows = ref(null)
+
 const soundOn = ref(load('dice.sound', 'on') === 'on')
 const audio = new Audio(rollSound)
 const soundBlocked = ref(false)
@@ -39,14 +47,17 @@ const shareLink = computed(() => `${window.location.origin}/?raum=${room.value}`
 dice.on('status', (s) => (status.value = s))
 dice.on('presence', (msg) => (players.value = msg.players))
 dice.on('history', (msg) => (rolls.value = msg.rolls.reverse()))
+dice.on('stats', (msg) => (statsRows.value = msg.rows))
 dice.on('cleared', (msg) => {
   rolls.value = []
+  statsRows.value = []
   $q.notify({ message: `${msg.by} hat den Verlauf geleert`, color: 'grey-8' })
 })
 dice.on('error', (msg) => $q.notify({ message: msg.message, color: 'negative', icon: 'error' }))
 dice.on('roll', (roll) => {
   rolls.value.unshift(roll)
   if (soundOn.value) playSound()
+  if (statsOpen.value) loadStats()
 })
 
 function playSound() {
@@ -146,6 +157,35 @@ async function copyLink() {
   } catch {
     $q.notify({ message: shareLink.value, color: 'grey-8', timeout: 6000 })
   }
+}
+
+function setLogFilter(value) {
+  logFilter.value = value
+  save('dice.filter', value)
+}
+
+function openStats() {
+  statsRows.value = null
+  statsOpen.value = true
+  loadStats()
+}
+
+function loadStats() {
+  send(() => dice.stats(0))
+}
+
+// [{ player, sides, count, avg, … }] -> [{ player, dice: [...] }]
+const statsByPlayer = computed(() => {
+  const groups = new Map()
+  for (const row of statsRows.value ?? []) {
+    if (!groups.has(row.player)) groups.set(row.player, [])
+    groups.get(row.player).push(row)
+  }
+  return [...groups].map(([player, dice]) => ({ player, dice }))
+})
+
+function decimal(value) {
+  return value.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
 }
 
 function toggleSound() {
@@ -374,14 +414,29 @@ function save(key, value) {
             <q-card class="panel log-card">
               <q-card-section class="section-title row items-center">
                 <div class="col">Verlauf</div>
+                <q-btn-toggle
+                  :model-value="logFilter"
+                  :options="[{ label: 'Alle', value: 'all' }, { label: 'Nur meine', value: 'mine' }]"
+                  dense
+                  no-caps
+                  unelevated
+                  size="sm"
+                  toggle-color="primary"
+                  color="grey-9"
+                  class="q-mr-sm"
+                  @update:model-value="setLogFilter"
+                />
+                <q-btn flat dense size="sm" icon="bar_chart" label="Statistik" class="q-mr-xs" @click="openStats" />
                 <q-btn flat dense size="sm" icon="delete_sweep" label="Leeren" :disable="!rolls.length" @click="clearLog" />
               </q-card-section>
               <q-separator dark />
               <div class="log">
-                <div v-if="!rolls.length" class="text-grey-6 q-pa-lg text-center">Noch nichts gewürfelt.</div>
+                <div v-if="!shownRolls.length" class="text-grey-6 q-pa-lg text-center">
+                  {{ rolls.length ? 'Du hast noch nichts gewürfelt.' : 'Noch nichts gewürfelt.' }}
+                </div>
                 <transition-group name="roll">
                   <div
-                    v-for="r in rolls"
+                    v-for="r in shownRolls"
                     :key="r.id"
                     class="entry"
                     :class="{ own: r.player === name }"
@@ -424,6 +479,34 @@ function save(key, value) {
         </div>
       </q-page>
     </q-page-container>
+
+    <q-dialog v-model="statsOpen">
+      <q-card class="panel" style="min-width: 340px; max-width: 520px">
+        <q-card-section class="section-title row items-center">
+          <div class="col">Würfelstatistik</div>
+          <q-btn flat round dense icon="close" v-close-popup />
+        </q-card-section>
+        <q-card-section class="q-pt-none text-caption text-grey-6">
+          Alle Würfe seit dem letzten Leeren des Verlaufs. Jeder einzelne Würfel zählt; in Klammern der Erwartungswert.
+        </q-card-section>
+        <q-separator dark />
+        <q-card-section class="stats">
+          <div v-if="statsRows === null" class="text-grey-6">Lade …</div>
+          <div v-else-if="!statsByPlayer.length" class="text-grey-6">Noch nichts gewürfelt.</div>
+          <div v-for="p in statsByPlayer" :key="p.player" class="q-mb-md">
+            <div class="player q-mb-xs" :style="{ color: playerColor(p.player) }">{{ p.player }}</div>
+            <div v-for="d in p.dice" :key="d.sides" class="row items-baseline stat-row">
+              <div class="col-2 text-weight-bold">W{{ d.sides }}</div>
+              <div class="col-4">
+                Ø <span class="text-secondary text-weight-bold">{{ decimal(d.avg) }}</span>
+                <span class="text-grey-6"> ({{ decimal((d.sides + 1) / 2) }})</span>
+              </div>
+              <div class="col text-grey-5">{{ d.count }}× · {{ d.min }}–{{ d.max }}</div>
+            </div>
+          </div>
+        </q-card-section>
+      </q-card>
+    </q-dialog>
 
     <q-dialog v-model="setupOpen" :persistent="!room || !name">
       <q-card class="panel" style="min-width: 320px">
@@ -550,6 +633,14 @@ body {
     text-decoration: line-through;
     border-style: dashed;
   }
+}
+.stats {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.stat-row {
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .roll-enter-active {
   transition: all 0.35s ease;

@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-import { DiceRoll, NumberGenerator } from '@dice-roller/rpg-dice-roller'
+import { DiceRoll, NumberGenerator, Parser } from '@dice-roller/rpg-dice-roller'
 
 if (NumberGenerator.engines.browserCrypto) {
   NumberGenerator.generator.engine = NumberGenerator.engines.browserCrypto
@@ -55,6 +55,21 @@ export class DiceRoom extends DurableObject {
         total    REAL    NOT NULL
       )
     `)
+    // Einzelne Würfel für die Statistik ("Grischa – W100: Ø 57,5")
+    const hadDice = this.sql
+      .exec("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'dice'")
+      .one().n > 0
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS dice (
+        roll_id INTEGER NOT NULL,
+        ts      INTEGER NOT NULL,
+        player  TEXT    NOT NULL,
+        sides   INTEGER NOT NULL,
+        value   INTEGER NOT NULL
+      )
+    `)
+    this.sql.exec('CREATE INDEX IF NOT EXISTS dice_ts ON dice (ts)')
+    if (!hadDice) this.backfillDice()
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'))
   }
 
@@ -128,8 +143,11 @@ export class DiceRoom extends DurableObject {
         return sendError(ws, err.message)
       }
       this.broadcast({ type: 'roll', roll })
+    } else if (msg.type === 'stats') {
+      ws.send(JSON.stringify({ type: 'stats', since: msg.since ?? 0, rows: this.stats(msg.since) }))
     } else if (msg.type === 'clear') {
       this.sql.exec('DELETE FROM rolls')
+      this.sql.exec('DELETE FROM dice')
       this.broadcast({ type: 'cleared', by: name })
     }
   }
@@ -188,8 +206,58 @@ export class DiceRoom extends DurableObject {
       )
       .one()
     this.sql.exec('DELETE FROM rolls WHERE id <= ?', id - HISTORY_KEEP)
+    this.sql.exec('DELETE FROM dice WHERE roll_id <= ?', id - HISTORY_KEEP)
+
+    // Gewürfelter Wert vor Modifikatoren – "min3" hebt an, zählt aber nicht als Wurf
+    const groups = diceRoll.rolls.filter((r) => Array.isArray(r?.rolls))
+    diceGroups(notation).forEach((sides, i) => {
+      if (!sides) return
+      for (const die of groups[i]?.rolls ?? []) {
+        this.sql.exec(
+          'INSERT INTO dice (roll_id, ts, player, sides, value) VALUES (?, ?, ?, ?, ?)',
+          id, entry.ts, player, sides, die.initialValue
+        )
+      }
+    })
 
     return { id, ...entry }
+  }
+
+  stats(since) {
+    return this.sql
+      .exec(
+        `SELECT player, sides, COUNT(*) AS count, AVG(value) AS avg, MIN(value) AS min, MAX(value) AS max
+         FROM dice WHERE ts >= ? GROUP BY player, sides ORDER BY player, sides`,
+        Number(since) || 0
+      )
+      .toArray()
+  }
+
+  // Einmalig nach dem Update: Würfel aus dem bestehenden Verlauf nachtragen
+  backfillDice() {
+    for (const r of this.sql.exec('SELECT id, ts, player, notation, output FROM rolls').toArray()) {
+      let sidesList
+      try {
+        sidesList = diceGroups(r.notation)
+      } catch {
+        continue
+      }
+      const brackets = [...r.output.slice(r.output.indexOf(':') + 1).matchAll(/\[([^\]]*)\]/g)]
+      sidesList.forEach((sides, i) => {
+        if (!sides || !brackets[i]) return
+        for (const raw of brackets[i][1].split(',')) {
+          // angehobene Werte (^) kennen ihren Ursprungswurf nicht mehr
+          if (raw.includes('^')) continue
+          const value = parseInt(raw, 10)
+          if (Number.isFinite(value)) {
+            this.sql.exec(
+              'INSERT INTO dice (roll_id, ts, player, sides, value) VALUES (?, ?, ?, ?, ?)',
+              r.id, r.ts, r.player, sides, value
+            )
+          }
+        }
+      })
+    }
   }
 
   broadcast(payload, except = null) {
@@ -229,6 +297,13 @@ function normalizeNotation(input) {
     }
   }
   return notation
+}
+
+// Seitenzahl je Würfelgruppe in Reihenfolge, z. B. "2d10+1d6" -> [10, 6]; W% = 100, Fudge = null
+function diceGroups(notation) {
+  return Parser.parse(notation)
+    .filter((part) => part && typeof part === 'object' && 'sides' in part)
+    .map((dice) => (dice.sides === '%' ? 100 : Number.isInteger(dice.sides) ? dice.sides : null))
 }
 
 function cleanText(value, max) {

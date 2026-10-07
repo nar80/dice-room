@@ -99,6 +99,9 @@ export function createDiceClient({ server = '' } = {}) {
     },
     clear() {
       return send({ type: 'clear' })
+    },
+    stats(since) {
+      return send({ type: 'stats', since })
     }
   }
 }
